@@ -164,5 +164,5 @@ jobs:
           files: |
             ./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/*ReSukiSU*.zip
             ./kernel_workspace/*arm64-v8a*.apk
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -32,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y python3 git curl ccache zip libelf-dev
+          sudo apt install -y python3 git curl ccache zip libelf-dev dos2unix
 
       - name: Restore ccache
         uses: actions/cache@v3
@@ -66,20 +66,20 @@ jobs:
           cp ReSukiSU_Patches/scope-minimized/kernel-gki-android15-6.6.patch kernel_platform/common/
           cd kernel_platform/common/
           patch -p1 < kernel-gki-android15-6.6.patch || true
+          cd ../KernelSU
+          KSU_VERSION=$(expr $(git rev-list --count "$KSU_MANAGER_BRANCH" 2>/dev/null || echo 13000) + 30700)
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
 
       - name: Add SUSFS
         run: |
           cd kernel_workspace/
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6
-          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch ./common/
-          cp susfs4ksu/kernel_patches/fs/* ./common/fs/
-          cp susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch ./kernel_platform/common/
+          cp susfs4ksu/kernel_patches/fs/* ./kernel_platform/common/fs/
+          cp susfs4ksu/kernel_patches/include/linux/* ./kernel_platform/common/include/linux/
           cd kernel_platform/common/
           sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' fs/proc/base.c
           patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch || true
-          cd ../KernelSU
-          KSU_VERSION=$(expr $(git rev-list --count "$KSU_MANAGER_BRANCH" 2>/dev/null || echo 13000) + 30700)
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
 
       - name: Configure SUSFS
         run: |
@@ -97,12 +97,10 @@ jobs:
 
       - name: Checkout Patch File
         uses: actions/checkout@v4
-        with:
-          path: 'kernel_workspace'
 
       - name: Apply Hmbird Patch
         run: |
-          cp kernel_workspace/hmbird_patch.patch kernel_workspace/kernel_platform/common/
+          cp hmbird_patch.patch kernel_workspace/kernel_platform/common/
           cd kernel_workspace/kernel_platform/common/
           patch -p1 < hmbird_patch.patch || true
           echo "obj-y += hmbird_patch.o" >> Makefile
@@ -116,13 +114,14 @@ jobs:
         run: |
           cd kernel_workspace/
           git clone https://github.com/Numbersf/SCHED_PATCH.git -b sm8750
-          cp ./SCHED_PATCH/fengchi_oneplus_13t_b.patch ./kernel_workspace/kernel_platform/common/
-          cd kernel_workspace/kernel_platform/common/
+          cp ./SCHED_PATCH/fengchi_oneplus_13t_b.patch ./kernel_platform/common/
+          cd kernel_platform/common/
           dos2unix "fengchi_oneplus_13t_b.patch"
           patch -p1 -F 3 < "fengchi_oneplus_13t_b.patch" || true
 
       - name: Build Kernel
         run: |
+          cd kernel_workspace/kernel_platform/common/
           export KBUILD_BUILD_TIMESTAMP="Tue Jun 10 12:12:23 UTC 2025"
           export PATH="$(pwd)/../prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH"
           make LLVM=1 LLVM_IAS=1 ARCH=arm64 \
@@ -146,6 +145,8 @@ jobs:
           zip -r ./OnePlus13T_ReSukiSU_${{ env.KSUVER }}.zip *
 
       - name: Get Latest Manager APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd kernel_workspace/
           run_id=$(gh api "repos/ReSukiSU/ReSukiSU/actions/workflows/build-manager.yml/runs?branch=main&status=success&event=push&per_page=1" --jq '.workflow_runs[0].id' || true)

@@ -1,0 +1,167 @@
+name: OnePlus_13T
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      CCACHE_DIR: /home/runner/.ccache
+      CCACHE_MAXSIZE: 8G
+    steps:
+      - name: Maximize build space
+
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Configure Git
+        run: |
+         git config --global user.name "44C38B8"
+         git config --global user.email "b2762537725@163.com"
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y python3 git curl ccache zip libelf-dev
+
+      - name: Restore ccache
+        uses: actions/cache@v3
+        with:
+          path: /home/runner/.ccache
+          key: ccache-${{ runner.os }}-${{ github.ref }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Install repo tool
+        run: |
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
+
+      - name: Initialize repo and sync
+        run: |
+          mkdir kernel_workspace && cd kernel_workspace
+          repo init -u https://github.com/44C38B8/kernel_manifest.git -b refs/heads/oneplus/sm8750 -m oneplus_13t_b.xml --depth=1
+          repo --trace sync -c -j$(nproc --all) --no-tags
+          rm kernel_platform/common/android/abi_gki_protected_exports_*
+          rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_*
+
+      - name: Initialize ReSukiSU
+        run: |
+          cd kernel_workspace/kernel_platform/
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+          cd ..
+          git clone https://github.com/ReSukiSU/ReSukiSU_Patches.git
+          cp ReSukiSU_Patches/scope-minimized/kernel-gki-android15-6.6.patch kernel_platform/common/
+          cd kernel_platform/common/
+          patch -p1 < kernel-gki-android15-6.6.patch || true
+
+      - name: Add SUSFS
+        run: |
+          cd kernel_workspace/
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch ./common/
+          cp susfs4ksu/kernel_patches/fs/* ./common/fs/
+          cp susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+          cd kernel_platform/common/
+          sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' fs/proc/base.c
+          patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch || true
+          cd ../KernelSU
+          KSU_VERSION=$(expr $(git rev-list --count "$KSU_MANAGER_BRANCH" 2>/dev/null || echo 13000) + 30700)
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+
+      - name: Configure SUSFS
+        run: |
+          cd kernel_workspace/kernel_platform
+          echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+      - name: Checkout Patch File
+        uses: actions/checkout@v4
+        with:
+          path: 'kernel_workspace'
+
+      - name: Apply Hmbird Patch
+        run: |
+          cp kernel_workspace/hmbird_patch.patch kernel_workspace/kernel_platform/common/
+          cd kernel_workspace/kernel_platform/common/
+          patch -p1 < hmbird_patch.patch || true
+          echo "obj-y += hmbird_patch.o" >> Makefile
+
+      - name: Customize Kernel Suffix
+        run: |
+          sed -i 's/${scm_version}//' ./kernel_workspace/kernel_platform/common/scripts/setlocalversion
+          sudo sed -i 's/-4k/-android15-8-gd43086512890-abogki423825152-4k/g' ./kernel_workspace/kernel_platform/common/arch/arm64/configs/gki_defconfig
+
+      - name: Apply SCHED_PATCH
+        run: |
+          cd kernel_workspace/
+          git clone https://github.com/Numbersf/SCHED_PATCH.git -b sm8750
+          cp ./SCHED_PATCH/fengchi_oneplus_13t_b.patch ./kernel_workspace/kernel_platform/common/
+          cd kernel_workspace/kernel_platform/common/
+          dos2unix "fengchi_oneplus_13t_b.patch"
+          patch -p1 -F 3 < "fengchi_oneplus_13t_b.patch" || true
+
+      - name: Build Kernel
+        run: |
+          export KBUILD_BUILD_TIMESTAMP="Tue Jun 10 12:12:23 UTC 2025"
+          export PATH="$(pwd)/../prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH"
+          make LLVM=1 LLVM_IAS=1 ARCH=arm64 \
+               RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc \
+               PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole \
+               O=out gki_defconfig
+          make -j$(nproc --all) LLVM=1 LLVM_IAS=1 ARCH=arm64 \
+               RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc \
+               PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole \
+               O=out Image
+
+      - name: Patch AnyKernel3
+        run: |
+          cd kernel_workspace/kernel_platform/common/out/arch/arm64/boot
+          curl -LO https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
+          chmod +x patch_linux
+          ./patch_linux
+          git clone https://github.com/Numbersf/AnyKernel3 --depth=1
+          cp oImage AnyKernel3/Image
+          cd AnyKernel3
+          zip -r ./OnePlus13T_ReSukiSU_${{ env.KSUVER }}.zip *
+
+      - name: Get Latest Manager APK
+        run: |
+          cd kernel_workspace/
+          run_id=$(gh api "repos/ReSukiSU/ReSukiSU/actions/workflows/build-manager.yml/runs?branch=main&status=success&event=push&per_page=1" --jq '.workflow_runs[0].id' || true)
+          artifact_url=$(gh api "repos/ReSukiSU/ReSukiSU/actions/runs/$run_id/artifacts" | jq -r ".artifacts[] | select(.name == \"Manager-release\") | .archive_download_url" | head -n1)
+          curl -fL -H "Authorization: token $GITHUB_TOKEN" -o "Manager-release.zip" "$artifact_url"
+          unzip -j "Manager-release.zip" "*arm64-v8a*.apk" -d .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ env.KSUVER }}
+          body: 一加13T_ReSukiSU_${{ env.KSUVER }}
+          tag_name: ${{ env.KSUVER }}
+          prerelease: true
+          files: |
+            ./kernel_workspace/kernel_platform/common/out/arch/arm64/boot/*ReSukiSU*.zip
+            ./kernel_workspace/*arm64-v8a*.apk
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

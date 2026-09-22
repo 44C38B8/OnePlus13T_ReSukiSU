@@ -145,6 +145,7 @@ jobs:
           zip -r ./OnePlus13T_ReSukiSU_${{ env.KSUVER }}.zip *
 
       - name: Get Latest Manager APK
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

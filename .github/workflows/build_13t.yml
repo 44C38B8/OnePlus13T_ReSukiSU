@@ -97,6 +97,9 @@ jobs:
 
       - name: Checkout Patch File
         uses: actions/checkout@v4
+        run: |
+          ls -la
+          ls -la kernel_workspace/kernel_platform/
 
       - name: Apply Hmbird Patch
         run: |
